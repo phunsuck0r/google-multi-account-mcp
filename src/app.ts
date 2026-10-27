@@ -11,8 +11,10 @@ import { registerGmailTools } from "./tools/gmail.js";
 import { registerCalendarTools } from "./tools/calendar.js";
 import { registerAdminTools } from "./tools/admin.js";
 import { escapeHtml } from "./mime.js";
+import { setupPage } from "./setup.js";
+import { q } from "./db.js";
 
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";
 
 const INSTRUCTIONS = `Multi-account Gmail and Google Calendar.
 Every tool takes an optional "account": a label, full address or domain; omit for the default account. Read/search tools also accept "all".
@@ -39,8 +41,18 @@ export function createApp() {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
 
-  app.get("/healthz", (_req, res) => {
-    res.json({ ok: true });
+  app.get("/healthz", async (_req, res) => {
+    try {
+      await q("select 1");
+      res.json({ ok: true, version: VERSION });
+    } catch {
+      res.status(503).json({ ok: false, error: "database unavailable" });
+    }
+  });
+
+  // First-run checklist with copy-paste values. Shows no secrets or account details.
+  app.get(["/", "/setup"], async (_req, res) => {
+    res.set("Cache-Control", "no-store").send(await setupPage());
   });
 
   // OAuth 2.1 authorization server for Claude (discovery, DCR, authorize, token, revoke).
@@ -95,7 +107,7 @@ export function createApp() {
 
   const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl) });
 
-  app.post("/mcp", bearer, express.json({ limit: "4mb" }), async (req, res) => {
+  app.post("/mcp", bearer, express.json({ limit: "35mb" }), async (req, res) => {
     const server = buildServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
@@ -115,10 +127,6 @@ export function createApp() {
   };
   app.get("/mcp", bearer, notAllowed);
   app.delete("/mcp", bearer, notAllowed);
-
-  app.get("/", (_req, res) => {
-    res.send(page("Google Multi-Account connector", `Private MCP connector. Endpoint: <code>${escapeHtml(mcpUrl.href)}</code>`));
-  });
 
   // Google's OAuth branding settings require public privacy and terms links.
   app.get("/privacy", (_req, res) => {

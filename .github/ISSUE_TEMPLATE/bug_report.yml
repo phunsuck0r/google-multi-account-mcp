@@ -1,0 +1,43 @@
+name: Bug report
+description: Something is not working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not include email addresses, message contents, tokens or your server URL. For security issues use the Security tab instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup page status
+      description: Which items on /setup show ❌ or ➖, if any.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From /healthz, e.g. 1.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Hosting
+      options: [Render, Docker, Node directly, Other]
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: e.g. claude.ai web, Claude Desktop, Claude Code
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server logs
+      description: Relevant lines with personal details removed.
+      render: text

@@ -6,7 +6,7 @@ import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextproto
 import { InvalidGrantError, InvalidTokenError, InvalidClientMetadataError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { q } from "./db.js";
 import { sha256, token } from "./crypto.js";
-import { config, mcpUrl } from "./config.js";
+import { config, mcpUrl, googleConfigured } from "./config.js";
 import { ownerLoginUrl } from "./google.js";
 
 const ACCESS_TTL = 60 * 60; // 1h
@@ -21,9 +21,14 @@ const clientsStore: OAuthRegisteredClientsStore = {
   async registerClient(client) {
     // Only Claude's own callback hosts may receive authorization codes.
     for (const uri of client.redirect_uris) {
-      const host = new URL(uri).hostname.toLowerCase();
+      const url = new URL(uri);
+      const host = url.hostname.toLowerCase();
       if (!config.allowedRedirectHosts.some((h) => host === h || host.endsWith(`.${h}`))) {
         throw new InvalidClientMetadataError(`redirect_uri host not allowed: ${host}`);
+      }
+      const loopback = host === "localhost" || host === "127.0.0.1";
+      if (url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
+        throw new InvalidClientMetadataError("redirect_uri must use https (http is allowed only for localhost)");
       }
     }
     const full = client as OAuthClientInformationFull;
@@ -50,6 +55,13 @@ export const provider: OAuthServerProvider = {
   },
 
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response) {
+    if (!googleConfigured() || !config.ownerEmails.length) {
+      const back = new URL(params.redirectUri);
+      back.searchParams.set("error", "temporarily_unavailable");
+      back.searchParams.set("error_description", `Server setup incomplete. Open ${config.baseUrl}/setup`);
+      if (params.state) back.searchParams.set("state", params.state);
+      return res.redirect(back.href);
+    }
     const id = token(24);
     await q("insert into pending (id, kind, data, expires_at) values ($1,'login',$2, now() + interval '10 minutes')", [
       id,

@@ -64,3 +64,13 @@ test("token encryption round-trips and is non-deterministic", () => {
   assert.notEqual(a, b);
   assert.equal(decrypt(a), "refresh-token");
 });
+
+test("toUtc reads local times in the given zone, including across DST", async () => {
+  const { toUtc } = await import("../src/time.js");
+  assert.equal(toUtc("2026-07-01T09:00", "Europe/London"), "2026-07-01T08:00:00.000Z");
+  assert.equal(toUtc("2026-12-01T09:00", "Europe/London"), "2026-12-01T09:00:00.000Z");
+  assert.equal(toUtc("2026-11-03", "America/New_York"), "2026-11-03T05:00:00.000Z");
+  assert.equal(toUtc("2026-11-03T09:00:00+02:00", "UTC"), "2026-11-03T07:00:00.000Z");
+  assert.equal(toUtc("2026-11-03T09:00:00Z", "Asia/Tokyo"), "2026-11-03T09:00:00.000Z");
+  assert.throws(() => toUtc("next tuesday", "UTC"), /Invalid date-time/);
+});

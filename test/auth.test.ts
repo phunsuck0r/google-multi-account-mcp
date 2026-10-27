@@ -96,9 +96,21 @@ test("rejects unauthenticated MCP calls with a resource metadata pointer", async
 
 test("only allowlisted redirect hosts can register", async () => {
   assert.equal((await register()).status, 201);
+  assert.equal((await register("http://localhost:33418/callback")).status, 201, "local clients like Claude Code");
   const bad = await register("https://evil.example.com/cb");
   assert.equal(bad.status, 400);
   assert.equal((await bad.json()).error, "invalid_client_metadata");
+  assert.equal((await register("http://claude.ai/cb")).status, 400, "non-loopback redirects must be https");
+});
+
+test("health and setup pages respond without exposing secrets", async () => {
+  const health = await (await fetch(`${B}/healthz`)).json();
+  assert.equal(health.ok, true);
+  const html = await (await fetch(`${B}/setup`)).text();
+  assert.match(html, /oauth\/google\/callback/);
+  assert.ok(!html.includes(process.env.GOOGLE_CLIENT_SECRET!), "secret must not appear");
+  assert.ok(!html.includes(process.env.ENCRYPTION_KEY!), "encryption key must not appear");
+  assert.ok(!html.includes("owner@example.com"), "owner addresses must not appear");
 });
 
 test("non-owner Google identities are denied", async () => {

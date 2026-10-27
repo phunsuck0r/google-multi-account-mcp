@@ -4,12 +4,16 @@ import type { calendar_v3 } from "googleapis";
 import { calendarFor, fanOut, resolve, resolveOne } from "../accounts.js";
 import { audit } from "../db.js";
 import { config } from "../config.js";
+import { toUtc } from "../time.js";
 import { accountArg, accountOrAllArg, emailList, ok, safe } from "./util.js";
 
 const RO = { readOnlyHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
 
 const sendUpdates = z.enum(["none", "all", "externalOnly"]).default("none").describe("Whether Google emails attendees about the change");
+const windowTime = z
+  .string()
+  .describe(`Date-time with offset (2026-11-03T09:00:00Z), local date-time (2026-11-03T09:00) or date; times without an offset are read in ${config.defaultTimeZone}`);
 const when = z.string().describe('ISO 8601 date-time (e.g. "2026-11-03T14:00:00") or a date ("2026-11-03") for all-day');
 
 function toTime(v: string, tz?: string): calendar_v3.Schema$EventDateTime {
@@ -81,18 +85,17 @@ export function registerCalendarTools(server: McpServer) {
       inputSchema: {
         account: accountOrAllArg,
         calendar_id: z.string().default("primary"),
-        time_min: z.string().describe("RFC 3339 start of window with offset, e.g. 2026-11-03T00:00:00Z"),
-        time_max: z.string().describe("RFC 3339 end of window with offset"),
+        time_min: windowTime,
+        time_max: windowTime,
         query: z.string().optional().describe("Free-text filter"),
         max_results: z.number().int().min(1).max(250).default(50),
       },
       annotations: RO,
     },
     safe(async ({ account, calendar_id, time_min, time_max, query, max_results }) => {
-      const tz = (s: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : new Date(s).toISOString());
       const res = await fanOut(await resolve(account, true), async (a) => {
         const items = (await (await calendarFor(a.label)).events.list({
-          calendarId: calendar_id, timeMin: tz(time_min), timeMax: tz(time_max), q: query,
+          calendarId: calendar_id, timeMin: toUtc(time_min, config.defaultTimeZone), timeMax: toUtc(time_max, config.defaultTimeZone), q: query,
           singleEvents: true, orderBy: "startTime", maxResults: max_results,
         })).data.items ?? [];
         return items.map(slim);
@@ -245,14 +248,14 @@ export function registerCalendarTools(server: McpServer) {
     {
       title: "Free/busy across accounts",
       description: 'Busy blocks for a window. account="all" (default) combines every connected mailbox, useful for finding a free slot across all your calendars.',
-      inputSchema: { account: accountOrAllArg, time_min: z.string(), time_max: z.string(), time_zone: z.string().optional() },
+      inputSchema: { account: accountOrAllArg, time_min: windowTime, time_max: windowTime, time_zone: z.string().optional().describe(`IANA zone for times without an offset; default ${config.defaultTimeZone}`) },
       annotations: RO,
     },
     safe(async ({ account, time_min, time_max, time_zone }) => {
       const tz = time_zone ?? config.defaultTimeZone;
       const res = await fanOut(await resolve(account ?? "all", true), async (a) => {
         const r = (await (await calendarFor(a.label)).freebusy.query({
-          requestBody: { timeMin: new Date(time_min).toISOString(), timeMax: new Date(time_max).toISOString(), timeZone: tz, items: [{ id: "primary" }] },
+          requestBody: { timeMin: toUtc(time_min, tz), timeMax: toUtc(time_max, tz), timeZone: tz, items: [{ id: "primary" }] },
         })).data;
         return r.calendars?.primary?.busy ?? [];
       });

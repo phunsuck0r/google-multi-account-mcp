@@ -11,7 +11,7 @@ const RO = { readOnlyHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 const SENDS = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
 
-const MAX_FORWARD_BYTES = 24 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 24 * 1024 * 1024;
 
 async function send(gmail: gmail_v1.Gmail, raw: string, threadId?: string) {
   const res = await gmail.users.messages.send({
@@ -41,6 +41,45 @@ async function labelIds(gmail: gmail_v1.Gmail, names: string[] = []) {
   });
 }
 
+/** Download a message's attachments (optionally only some of them) for re-attaching to a new message. */
+async function fetchAttachments(gmail: gmail_v1.Gmail, messageId: string, message?: gmail_v1.Schema$Message, only?: string[]) {
+  const m = message ?? (await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" })).data;
+  const wanted = attachments(m.payload).filter((a) => !only?.length || only.includes(a.attachmentId) || only.includes(a.filename));
+  if (only?.length && !wanted.length) throw new Error(`No matching attachments on message ${messageId}`);
+  const out: OutAttachment[] = [];
+  let total = 0;
+  for (const a of wanted) {
+    total += a.size;
+    if (total > MAX_ATTACHMENT_BYTES) throw new Error("Attachments exceed Gmail's 25 MB message limit");
+    const data = (await gmail.users.messages.attachments.get({ userId: "me", messageId, id: a.attachmentId })).data.data ?? "";
+    out.push({ filename: a.filename, mimeType: a.mimeType, data: Buffer.from(data, "base64url") });
+  }
+  return out;
+}
+
+const attachmentInput = z.object({
+  filename: z.string(),
+  mime_type: z.string().default("application/octet-stream"),
+  content_base64: z.string().describe("File content, base64 encoded"),
+});
+const attachFromInput = z.object({
+  message_id: z.string().describe("Existing message in the same account"),
+  attachments: z.array(z.string()).optional().describe("Attachment IDs or filenames to include; omit for all"),
+});
+
+/** Combine uploaded and re-used attachments for a draft. */
+async function draftAttachments(
+  gmail: gmail_v1.Gmail,
+  uploaded: z.infer<typeof attachmentInput>[] = [],
+  from?: z.infer<typeof attachFromInput>,
+) {
+  const out: OutAttachment[] = uploaded.map((a) => ({ filename: a.filename, mimeType: a.mime_type, data: Buffer.from(a.content_base64, "base64") }));
+  if (from) out.push(...(await fetchAttachments(gmail, from.message_id, undefined, from.attachments)));
+  const total = out.reduce((n, a) => n + a.data.length, 0);
+  if (total > MAX_ATTACHMENT_BYTES) throw new Error("Attachments exceed Gmail's 25 MB message limit");
+  return out;
+}
+
 /** Build a Gmail-style inline forward of a message, re-attaching its attachments. */
 async function buildForward(gmail: gmail_v1.Gmail, account: Account, messageId: string, to: string[], note?: string) {
   const m = (await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" })).data;
@@ -52,14 +91,7 @@ async function buildForward(gmail: gmail_v1.Gmail, account: Account, messageId: 
   const hdrHtml = `<div>---------- Forwarded message ---------<br>${fields.map(([k, v]) => `${k}: ${escapeHtml(v)}`).join("<br>")}</div><br>`;
   const notePrefix = note ? `${note}\n\n` : "";
 
-  const atts: OutAttachment[] = [];
-  let total = 0;
-  for (const a of attachments(m.payload)) {
-    total += a.size;
-    if (total > MAX_FORWARD_BYTES) throw new Error("Attachments exceed Gmail's size limit for forwarding");
-    const data = (await gmail.users.messages.attachments.get({ userId: "me", messageId, id: a.attachmentId })).data.data ?? "";
-    atts.push({ filename: a.filename, mimeType: a.mimeType, data: Buffer.from(data, "base64url") });
-  }
+  const atts = await fetchAttachments(gmail, messageId, m);
 
   const subject = header(m, "Subject");
   const raw = buildMime({
@@ -284,6 +316,8 @@ export function registerGmailTools(server: McpServer) {
     subject: z.string(),
     body: z.string().describe("Plain text body"),
     html_body: z.string().optional().describe("Optional HTML version"),
+    attachments: z.array(attachmentInput).optional().describe("Files to attach"),
+    attach_from: attachFromInput.optional().describe("Re-use attachments from an existing message"),
   };
 
   server.registerTool(
@@ -291,22 +325,25 @@ export function registerGmailTools(server: McpServer) {
     { title: "Create Gmail draft", description: "Create a new draft. Send it with gmail_send_draft.", inputSchema: { account: accountArg, ...draftFields }, annotations: WRITE },
     safe(async (args) => {
       const a = await resolveOne(args.account);
-      const raw = buildMime({ from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: args.body, html: args.html_body });
-      const d = await createDraft(await gmailFor(a.label), raw);
-      await audit("gmail_create_draft", a.label, { draftId: d.id, to: args.to, subject: args.subject });
-      return ok({ account: a.label, draftId: d.id, messageId: d.message?.id });
+      const gmail = await gmailFor(a.label);
+      const atts = await draftAttachments(gmail, args.attachments, args.attach_from);
+      const raw = buildMime({ from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: args.body, html: args.html_body, attachments: atts });
+      const d = await createDraft(gmail, raw);
+      await audit("gmail_create_draft", a.label, { draftId: d.id, to: args.to, subject: args.subject, attachments: atts.map((x) => x.filename) });
+      return ok({ account: a.label, draftId: d.id, messageId: d.message?.id, attachments: atts.map((x) => x.filename) });
     }),
   );
 
   server.registerTool(
     "gmail_update_draft",
-    { title: "Update Gmail draft", description: "Replace a draft's content.", inputSchema: { account: accountArg, draft_id: z.string(), ...draftFields }, annotations: WRITE },
+    { title: "Update Gmail draft", description: "Replace a draft's content entirely, including attachments (pass them again to keep them).", inputSchema: { account: accountArg, draft_id: z.string(), ...draftFields }, annotations: WRITE },
     safe(async (args) => {
       const a = await resolveOne(args.account);
       const gmail = await gmailFor(a.label);
       const existing = (await gmail.users.drafts.get({ userId: "me", id: args.draft_id, format: "metadata" })).data;
+      const atts = await draftAttachments(gmail, args.attachments, args.attach_from);
       const raw = buildMime({
-        from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: args.body, html: args.html_body,
+        from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: args.body, html: args.html_body, attachments: atts,
         inReplyTo: header(existing.message, "In-Reply-To") || undefined, references: header(existing.message, "References") || undefined,
       });
       const d = (await gmail.users.drafts.update({

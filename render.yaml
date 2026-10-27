@@ -20,7 +20,7 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
-      - key: OWNER_EMAILS
+      - key: OWNER_EMAILS # your Google address(es); the setup page guides the rest
         sync: false
       - key: FORWARD_ALLOWLIST
         sync: false

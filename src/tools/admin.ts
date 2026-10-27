@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createConnectLink, listAccounts, removeAccount, setDefault } from "../accounts.js";
+import { createConnectLink, fanOut, gmailFor, listAccounts, removeAccount, setDefault } from "../accounts.js";
 import { audit, q } from "../db.js";
 import { config } from "../config.js";
 import { ok, safe } from "./util.js";
@@ -10,11 +10,23 @@ export function registerAdminTools(server: McpServer) {
     "list_accounts",
     {
       title: "List connected mailboxes",
-      description: "List connected Google accounts with their labels. Call this first when unsure which account to use.",
-      inputSchema: {},
+      description:
+        "List connected Google accounts with their labels. Call this first when unsure which account to use. Set check=true to verify each account's Google access still works (use when calls fail or periodically).",
+      inputSchema: { check: z.boolean().default(false).describe("Test each account's Google access") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    safe(async () => ok({ accounts: await listAccounts(), forwardAllowlist: config.forwardAllowlist })),
+    safe(async ({ check }) => {
+      const accounts = await listAccounts();
+      if (!check) return ok({ accounts, forwardAllowlist: config.forwardAllowlist });
+      const health = await fanOut(accounts, async (a) => (await (await gmailFor(a.label)).users.getProfile({ userId: "me" })).data.emailAddress);
+      return ok({
+        accounts: accounts.map((a) => {
+          const h = health.find((x) => x.account === a.label);
+          return { ...a, status: h?.error ? "needs reconnect" : "ok", error: h?.error };
+        }),
+        forwardAllowlist: config.forwardAllowlist,
+      });
+    }),
   );
 
   server.registerTool(

@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import { config, googleCallbackUrl } from "./config.js";
+import { config, googleCallbackUrl, googleConfigured } from "./config.js";
 
 export const MAILBOX_SCOPES = [
   "openid",
@@ -9,6 +9,7 @@ export const MAILBOX_SCOPES = [
 ];
 
 export function oauthClient() {
+  if (!googleConfigured()) throw new Error(`Google OAuth is not configured yet. Open ${config.baseUrl}/setup.`);
   return new google.auth.OAuth2(config.googleClientId, config.googleClientSecret, googleCallbackUrl);
 }
 
