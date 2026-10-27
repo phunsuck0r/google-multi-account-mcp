@@ -14,10 +14,15 @@ const sendUpdates = z.enum(["none", "all", "externalOnly"]).default("none").desc
 const windowTime = z
   .string()
   .describe(`Date-time with offset (2026-11-03T09:00:00Z), local date-time (2026-11-03T09:00) or date; times without an offset are read in ${config.defaultTimeZone}`);
-const when = z.string().describe('ISO 8601 date-time (e.g. "2026-11-03T14:00:00") or a date ("2026-11-03") for all-day');
+const when = z
+  .string()
+  .describe(`Date-time (2026-11-03T14:00, read in time_zone or ${config.defaultTimeZone}; or with an offset) or a date (2026-11-03) for all-day`);
 
 function toTime(v: string, tz?: string): calendar_v3.Schema$EventDateTime {
-  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? { date: v } : { dateTime: v, timeZone: tz ?? config.defaultTimeZone };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return { date: v };
+  const zone = tz ?? config.defaultTimeZone;
+  // Normalise to a full RFC 3339 instant: Google rejects e.g. "2026-11-03T09:00" (no seconds).
+  return { dateTime: toUtc(v, zone), timeZone: zone };
 }
 
 const JOIN_RE = /https:\/\/[^\s"<>]*(?:zoom\.us\/j\/|teams\.microsoft\.com\/(?:meet|l\/meetup-join)\/|meet\.google\.com\/)[^\s"<>]*/i;

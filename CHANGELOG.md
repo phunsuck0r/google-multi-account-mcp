@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+- `calendar_create_event` and `calendar_update_event` accept times without seconds (`2026-11-03T09:00`) and read them in `time_zone` / `DEFAULT_TZ`. Previously Google rejected them with "Bad Request".
+
 ## 1.1.0
 
 ### Added

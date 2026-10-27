@@ -14,7 +14,7 @@ import { escapeHtml } from "./mime.js";
 import { setupPage } from "./setup.js";
 import { q } from "./db.js";
 
-export const VERSION = "1.1.0";
+export const VERSION = "1.1.1";
 
 const INSTRUCTIONS = `Multi-account Gmail and Google Calendar.
 Every tool takes an optional "account": a label, full address or domain; omit for the default account. Read/search tools also accept "all".
