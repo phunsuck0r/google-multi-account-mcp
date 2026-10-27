@@ -24,6 +24,20 @@ test("buildMime produces a multipart message with encoded subject and attachment
   assert.ok(raw.includes(Buffer.from("Hello").toString("base64")));
 });
 
+test("buildMime rejects line breaks in headers and escapes quotes in attachment names", () => {
+  const base = { from: "me@example.com", to: ["a@example.com"], subject: "Hi", text: "Hello" };
+  assert.throws(() => buildMime({ ...base, to: ["a@example.com\r\nBcc: x@example.net"] }), /To must not contain line breaks/);
+  assert.throws(() => buildMime({ ...base, cc: ["b@example.com\nBcc: x@example.net"] }), /Cc must not contain line breaks/);
+  assert.throws(
+    () => buildMime({ ...base, attachments: [{ filename: "a.txt", mimeType: "text/plain\r\nX-Evil: 1", data: Buffer.from("hi") }] }),
+    /MIME type must not contain line breaks/,
+  );
+  // A line break in the subject is encoded, not rejected.
+  assert.doesNotMatch(buildMime({ ...base, subject: "Hi\r\nX-Evil: 1" }), /X-Evil/);
+  const raw = buildMime({ ...base, attachments: [{ filename: 'a"b.txt', mimeType: "text/plain", data: Buffer.from("hi") }] });
+  assert.match(raw, /filename="a\\"b.txt"/);
+});
+
 test("htmlToText strips markup and decodes entities", () => {
   assert.equal(htmlToText("<style>x{}</style><p>Fish &amp; chips</p><br>Done"), "Fish & chips\n\nDone");
 });
