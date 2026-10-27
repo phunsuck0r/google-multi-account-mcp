@@ -1,0 +1,32 @@
+# Render Blueprint: web service + Postgres. Deploy with the "Deploy to Render" button in the README.
+services:
+  - type: web
+    name: google-multi-account-mcp
+    runtime: node
+    plan: starter # the free plan sleeps when idle, which times out MCP clients
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: google-multi-account-mcp-db
+          property: connectionString
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: OWNER_EMAILS
+        sync: false
+      - key: FORWARD_ALLOWLIST
+        sync: false
+      - key: DEFAULT_TZ
+        value: UTC
+
+databases:
+  - name: google-multi-account-mcp-db
+    plan: basic-256mb # free Render Postgres is deleted after 30 days
