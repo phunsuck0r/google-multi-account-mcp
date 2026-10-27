@@ -76,6 +76,13 @@ export function summarise(m: gmail_v1.Schema$Message, includeBody: boolean) {
 // ---- Building outgoing MIME ----
 
 const encWord = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString("base64")}?=`);
+/** Header values that are written verbatim must not contain line breaks, or they could smuggle extra headers (e.g. a hidden Bcc). */
+const headerValue = (name: string, s: string) => {
+  if (/[\r\n]/.test(s)) throw new Error(`${name} must not contain line breaks`);
+  return s;
+};
+/** Quoted MIME parameter: encoded if non-ASCII, with quotes and backslashes escaped. */
+const quotedParam = (s: string) => encWord(s).replace(/["\\]/g, "\\$&");
 const wrap76 = (b64: string) => b64.replace(/.{76}/g, "$&\r\n");
 const boundary = () => `b_${randomBytes(12).toString("hex")}`;
 
@@ -94,13 +101,13 @@ export function buildMime(o: {
   attachments?: OutAttachment[];
 }): string {
   const h: string[] = [];
-  if (o.from) h.push(`From: ${o.from}`);
-  h.push(`To: ${o.to.join(", ")}`);
-  if (o.cc?.length) h.push(`Cc: ${o.cc.join(", ")}`);
-  if (o.bcc?.length) h.push(`Bcc: ${o.bcc.join(", ")}`);
+  if (o.from) h.push(`From: ${headerValue("From", o.from)}`);
+  h.push(`To: ${headerValue("To", o.to.join(", "))}`);
+  if (o.cc?.length) h.push(`Cc: ${headerValue("Cc", o.cc.join(", "))}`);
+  if (o.bcc?.length) h.push(`Bcc: ${headerValue("Bcc", o.bcc.join(", "))}`);
   h.push(`Subject: ${encWord(o.subject)}`);
-  if (o.inReplyTo) h.push(`In-Reply-To: ${o.inReplyTo}`);
-  if (o.references) h.push(`References: ${o.references}`);
+  if (o.inReplyTo) h.push(`In-Reply-To: ${headerValue("In-Reply-To", o.inReplyTo)}`);
+  if (o.references) h.push(`References: ${headerValue("References", o.references)}`);
   h.push("MIME-Version: 1.0");
 
   const textPart = `Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrap76(Buffer.from(o.text).toString("base64"))}`;
@@ -116,7 +123,7 @@ export function buildMime(o: {
   if (o.attachments?.length) {
     const b = boundary();
     const parts = [body, ...o.attachments.map((a) =>
-      `Content-Type: ${a.mimeType}; name="${encWord(a.filename)}"\r\nContent-Disposition: attachment; filename="${encWord(a.filename)}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrap76(a.data.toString("base64"))}`)];
+      `Content-Type: ${headerValue("Attachment MIME type", a.mimeType)}; name="${quotedParam(a.filename)}"\r\nContent-Disposition: attachment; filename="${quotedParam(a.filename)}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrap76(a.data.toString("base64"))}`)];
     body = `Content-Type: multipart/mixed; boundary="${b}"\r\n\r\n${parts.map((p) => `--${b}\r\n${p}`).join("\r\n")}\r\n--${b}--`;
   }
   return `${h.join("\r\n")}\r\n${body}\r\n`;
