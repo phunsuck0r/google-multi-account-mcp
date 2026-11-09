@@ -6,12 +6,13 @@ import { audit } from "../db.js";
 import { config } from "../config.js";
 import { attachments, bodies, buildMime, escapeHtml, header, htmlToText, summarise, type OutAttachment } from "../mime.js";
 import { accountArg, accountOrAllArg, emailList, ok, safe } from "./util.js";
+import { createUpload, getUpload, MAX_UPLOAD_BYTES } from "../uploads.js";
 
 const RO = { readOnlyHint: true, openWorldHint: false } as const;
 const WRITE = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 const SENDS = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
 
-const MAX_ATTACHMENT_BYTES = 24 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = MAX_UPLOAD_BYTES;
 
 async function send(gmail: gmail_v1.Gmail, raw: string, threadId?: string) {
   const res = await gmail.users.messages.send({
@@ -58,9 +59,10 @@ async function fetchAttachments(gmail: gmail_v1.Gmail, messageId: string, messag
 }
 
 const attachmentInput = z.object({
-  filename: z.string(),
-  mime_type: z.string().default("application/octet-stream"),
-  content_base64: z.string().describe("File content, base64 encoded"),
+  upload_id: z.string().optional().describe("From gmail_create_upload, after the file has been PUT to its link. Use this for any real file."),
+  content_base64: z.string().optional().describe("Inline base64. Only for files of a few KB; give exactly one of upload_id or content_base64."),
+  filename: z.string().optional().describe("Required with content_base64; overrides the uploaded name with upload_id"),
+  mime_type: z.string().optional(),
 });
 const attachFromInput = z.object({
   message_id: z.string().describe("Existing message in the same account"),
@@ -73,7 +75,17 @@ async function draftAttachments(
   uploaded: z.infer<typeof attachmentInput>[] = [],
   from?: z.infer<typeof attachFromInput>,
 ) {
-  const out: OutAttachment[] = uploaded.map((a) => ({ filename: a.filename, mimeType: a.mime_type, data: Buffer.from(a.content_base64, "base64") }));
+  const out: OutAttachment[] = [];
+  for (const a of uploaded) {
+    if (!a.upload_id === !a.content_base64) throw new Error("Each attachment needs exactly one of upload_id or content_base64");
+    if (a.upload_id) {
+      const u = await getUpload(a.upload_id);
+      out.push({ filename: a.filename ?? u.filename, mimeType: a.mime_type ?? u.mimeType, data: u.data });
+    } else {
+      if (!a.filename) throw new Error("filename is required with content_base64");
+      out.push({ filename: a.filename, mimeType: a.mime_type ?? "application/octet-stream", data: Buffer.from(a.content_base64!, "base64") });
+    }
+  }
   if (from) out.push(...(await fetchAttachments(gmail, from.message_id, undefined, from.attachments)));
   const total = out.reduce((n, a) => n + a.data.length, 0);
   if (total > MAX_ATTACHMENT_BYTES) throw new Error("Attachments exceed Gmail's 25 MB message limit");
@@ -309,6 +321,25 @@ export function registerGmailTools(server: McpServer) {
     }),
   );
 
+  server.registerTool(
+    "gmail_create_upload",
+    {
+      title: "Create attachment upload link",
+      description:
+        "Get a one-time link for uploading a file to attach. PUT the raw bytes to upload_url (e.g. curl -sS -T <file> <upload_url>; max 24 MB), then pass { upload_id } in attachments of gmail_create_draft, gmail_update_draft or gmail_reply. Use this rather than content_base64 for anything but tiny files.",
+      inputSchema: { filename: z.string(), mime_type: z.string().default("application/octet-stream") },
+      annotations: WRITE,
+    },
+    safe(async ({ filename, mime_type }) => {
+      const u = await createUpload(filename, mime_type);
+      return ok({ ...u, method: "PUT", example: `curl -sS -T "<file>" "${u.upload_url}"` });
+    }),
+  );
+
+  const attachFields = {
+    attachments: z.array(attachmentInput).optional().describe("Files to attach"),
+    attach_from: attachFromInput.optional().describe("Re-use attachments from an existing message"),
+  };
   const draftFields = {
     to: emailList,
     cc: emailList.optional(),
@@ -316,8 +347,7 @@ export function registerGmailTools(server: McpServer) {
     subject: z.string(),
     body: z.string().describe("Plain text body"),
     html_body: z.string().optional().describe("Optional HTML version"),
-    attachments: z.array(attachmentInput).optional().describe("Files to attach"),
-    attach_from: attachFromInput.optional().describe("Re-use attachments from an existing message"),
+    ...attachFields,
   };
 
   server.registerTool(
@@ -389,7 +419,7 @@ export function registerGmailTools(server: McpServer) {
     "gmail_reply",
     {
       title: "Draft Gmail reply",
-      description: "Create a reply draft in the original thread (with quoted original). Send it with gmail_send_draft.",
+      description: "Create a reply draft in the original thread (with quoted original), optionally with attachments. Send it with gmail_send_draft.",
       inputSchema: {
         account: accountArg,
         message_id: z.string().describe("Message being replied to"),
@@ -397,10 +427,11 @@ export function registerGmailTools(server: McpServer) {
         reply_all: z.boolean().default(false),
         cc: emailList.optional().describe("Extra Cc recipients"),
         include_quote: z.boolean().default(true),
+        ...attachFields,
       },
       annotations: WRITE,
     },
-    safe(async ({ account, message_id, body, reply_all, cc, include_quote }) => {
+    safe(async ({ account, message_id, body, reply_all, cc, include_quote, attachments: uploaded, attach_from }) => {
       const a = await resolveOne(account);
       const gmail = await gmailFor(a.label);
       const m = (await gmail.users.messages.get({ userId: "me", id: message_id, format: "full" })).data;
@@ -424,10 +455,11 @@ export function registerGmailTools(server: McpServer) {
         const orig = (ot || htmlToText(oh)).slice(0, 10000);
         text += `\n\nOn ${header(m, "Date")}, ${header(m, "From")} wrote:\n${orig.split("\n").map((l) => `> ${l}`).join("\n")}`;
       }
-      const raw = buildMime({ from: a.email, to, cc: ccList, subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`, text, inReplyTo: msgId, references: refs });
+      const atts = await draftAttachments(gmail, uploaded, attach_from);
+      const raw = buildMime({ from: a.email, to, cc: ccList, subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`, text, inReplyTo: msgId, references: refs, attachments: atts });
       const d = await createDraft(gmail, raw, m.threadId ?? undefined);
-      await audit("gmail_reply", a.label, { draftId: d.id, inReplyTo: message_id, to, cc: ccList });
-      return ok({ account: a.label, draftId: d.id, to, cc: ccList, note: "Draft created. Use gmail_send_draft to send." });
+      await audit("gmail_reply", a.label, { draftId: d.id, inReplyTo: message_id, to, cc: ccList, attachments: atts.map((x) => x.filename) });
+      return ok({ account: a.label, draftId: d.id, messageId: d.message?.id, to, cc: ccList, attachments: atts.map((x) => x.filename), note: "Draft created. Use gmail_send_draft to send." });
     }),
   );
 

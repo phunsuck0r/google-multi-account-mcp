@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+- `gmail_create_upload`: one-time upload link for attachments. The client PUTs the raw file (`curl -T`), then passes `upload_id` in `attachments`. Previously the only route for a new file was `content_base64`, which the model has to type out in the tool call, so anything beyond a few KB could not be attached.
+- `gmail_reply` accepts `attachments` and `attach_from`, and returns the draft's `messageId`.
+
+### Changed
+- In `attachments`, `filename` is optional with `upload_id` (defaults to the uploaded name). `content_base64` is unchanged.
+
 ## 1.1.1
 
 ### Fixed

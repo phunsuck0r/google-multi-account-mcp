@@ -18,7 +18,7 @@ Built-in Google connectors typically hold one Google identity; connecting a seco
 ## Features
 
 - **Multi-account**: connect any number of Google accounts under short labels (`work`, `personal`, `client-a`) and pick one per call by label, address or domain. Read and search tools accept `account: "all"`.
-- **Gmail**: search, read threads and messages, fetch attachments, labels, archive / read / star, trash, drafts with attachments (uploaded or re-used from another email), replies with quoting, and inline forwards that keep attachments.
+- **Gmail**: search, read threads and messages, fetch attachments, labels, archive / read / star, trash, drafts and replies with attachments (uploaded through a one-time link or re-used from another email), replies with quoting, and inline forwards that keep attachments.
 - **Calendar**: list calendars and events, merged timelines across accounts, create / update / delete events, respond to invites, free/busy across every account. Times without an offset are read in your configured time zone.
 - **Safe sending by default**: mail to arbitrary recipients is always draft first, then `gmail_send_draft`, so each send is a separate, reviewable tool call.
 - **Optional auto-forward allowlist**: `forward_to_allowlist` sends immediately, but only to addresses you configure (for example an AI agent's inbox), so it can be set to "always allow" in your MCP client without opening a general send path.
@@ -135,7 +135,7 @@ Every tool takes an optional `account`: a label, full address or domain. Omit it
 |---|---|
 | Accounts | `list_accounts` (with optional health check), `add_account`, `remove_account`, `set_default_account`, `audit_log` |
 | Gmail read | `gmail_search`*, `gmail_read_thread`, `gmail_read_message`, `gmail_get_attachment`, `gmail_list_labels`, `gmail_list_drafts` |
-| Gmail write | `gmail_create_draft`, `gmail_update_draft`, `gmail_delete_draft`, `gmail_reply`, `gmail_forward`, `gmail_send_draft`, `gmail_modify`, `gmail_create_label`, `gmail_trash` |
+| Gmail write | `gmail_create_upload`, `gmail_create_draft`, `gmail_update_draft`, `gmail_delete_draft`, `gmail_reply`, `gmail_forward`, `gmail_send_draft`, `gmail_modify`, `gmail_create_label`, `gmail_trash` |
 | Auto-forward | `forward_to_allowlist` (only when `FORWARD_ALLOWLIST` is set) |
 | Calendar | `calendar_list_calendars`*, `calendar_list_events`*, `calendar_get_event`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`, `calendar_respond`, `calendar_free_busy`* |
 
@@ -144,7 +144,9 @@ Every tool takes an optional `account`: a label, full address or domain. Omit it
 Notes:
 
 - Calendar edits never email attendees unless `send_updates` is set.
-- Drafts can carry attachments uploaded as base64 or re-used from an existing message (`attach_from`). `gmail_update_draft` replaces the whole draft, so pass attachments again to keep them.
+- To attach a file, call `gmail_create_upload`, PUT the bytes to the returned link (`curl -T <file> <upload_url>`), then pass `{ upload_id }` in `attachments` of `gmail_create_draft`, `gmail_update_draft` or `gmail_reply`. The link takes one upload, needs no token (the unguessable URL is the credential) and expires with the file after 30 minutes. The client's shell must be able to reach your host; sandboxed clients may need it on their network allowlist.
+- `content_base64` still works but the model has to type the file out, so it only suits files of a few KB. `attach_from` re-uses attachments from an existing message.
+- `gmail_update_draft` replaces the whole draft, so pass attachments again to keep them (`attach_from` with the draft's `messageId` works).
 - Messages are limited to Gmail's 25 MB.
 
 ## Troubleshooting
