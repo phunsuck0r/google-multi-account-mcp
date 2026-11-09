@@ -15,7 +15,7 @@ let B: string;
 
 before(async () => {
   await migrate();
-  await q("truncate oauth_clients, pending, auth_codes, tokens, accounts, audit_log");
+  await q("truncate oauth_clients, pending, auth_codes, tokens, accounts, audit_log, uploads");
   server = createApp().listen(0);
   await new Promise((r) => server.once("listening", r));
   B = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -168,4 +168,42 @@ test("forward_to_allowlist refuses destinations off the allowlist", async () => 
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /not allowlisted/);
+});
+
+test("attachment uploads: one-time link takes raw bytes without passing them through the model", async () => {
+  const { getUpload } = await import("../src/uploads.js");
+  const { tok } = await fullLogin();
+  const res = await mcp(tok.access_token, {
+    jsonrpc: "2.0", id: 6, method: "tools/call",
+    params: { name: "gmail_create_upload", arguments: { filename: "signed.pdf", mime_type: "application/pdf" } },
+  });
+  const { upload_id, upload_url } = JSON.parse(res.result.content[0].text);
+  const url = (upload_url as string).replace("http://localhost:0", B);
+  await assert.rejects(getUpload(upload_id), /Nothing has been uploaded/);
+
+  const bytes = randomBytes(1024 * 1024);
+  const put = await fetch(url, { method: "PUT", body: bytes });
+  assert.equal(put.status, 200);
+  assert.equal((await put.json()).bytes, bytes.length);
+
+  const stored = await getUpload(upload_id);
+  assert.equal(stored.filename, "signed.pdf");
+  assert.equal(stored.mimeType, "application/pdf");
+  assert.ok(stored.data.equals(bytes));
+
+  assert.equal((await fetch(url, { method: "PUT", body: "overwrite" })).status, 404, "link accepts one upload");
+  assert.equal((await fetch(`${B}/uploads/nope`, { method: "PUT", body: "x" })).status, 404);
+
+  await q("update uploads set expires_at = now() - interval '1 minute' where id=$1", [upload_id]);
+  await assert.rejects(getUpload(upload_id), /not found or expired/);
+});
+
+test("draft tools accept upload_id attachments, including gmail_reply", async () => {
+  const { tok } = await fullLogin();
+  const list = await mcp(tok.access_token, { jsonrpc: "2.0", id: 7, method: "tools/list" });
+  const props = (name: string) => list.result.tools.find((t: any) => t.name === name).inputSchema.properties;
+  for (const name of ["gmail_create_draft", "gmail_update_draft", "gmail_reply"]) {
+    assert.ok(props(name).attachments.items.properties.upload_id, `${name} takes upload_id`);
+    assert.ok(props(name).attach_from, `${name} takes attach_from`);
+  }
 });

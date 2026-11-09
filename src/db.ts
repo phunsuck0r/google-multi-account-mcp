@@ -63,6 +63,14 @@ export async function migrate() {
       account text,
       details jsonb
     );
+    -- Files uploaded to a one-time link for attaching to drafts. Short-lived.
+    create table if not exists uploads (
+      id text primary key,
+      filename text not null,
+      mime_type text not null,
+      data bytea, -- null until the PUT arrives
+      expires_at timestamptz not null
+    );
   `);
 }
 
@@ -74,4 +82,5 @@ export async function sweep() {
   await q("delete from pending where expires_at < now()");
   await q("delete from auth_codes where expires_at < now()");
   await q("delete from tokens where expires_at < now()");
+  await q("delete from uploads where expires_at < now()");
 }
