@@ -4,7 +4,7 @@ import type { gmail_v1 } from "googleapis";
 import { fanOut, gmailFor, resolve, resolveOne, type Account } from "../accounts.js";
 import { audit } from "../db.js";
 import { config } from "../config.js";
-import { attachments, bodies, buildMime, escapeHtml, header, htmlToText, summarise, type OutAttachment } from "../mime.js";
+import { attachments, bodies, buildMime, escapeHtml, header, htmlToText, summarise, unwrap, type OutAttachment } from "../mime.js";
 import { accountArg, accountOrAllArg, emailList, ok, safe } from "./util.js";
 import { createUpload, getUpload, MAX_UPLOAD_BYTES } from "../uploads.js";
 
@@ -345,7 +345,7 @@ export function registerGmailTools(server: McpServer) {
     cc: emailList.optional(),
     bcc: emailList.optional(),
     subject: z.string(),
-    body: z.string().describe("Plain text body"),
+    body: z.string().describe("Plain text body. One line per paragraph; do not hard-wrap lines."),
     html_body: z.string().optional().describe("Optional HTML version"),
     ...attachFields,
   };
@@ -357,7 +357,7 @@ export function registerGmailTools(server: McpServer) {
       const a = await resolveOne(args.account);
       const gmail = await gmailFor(a.label);
       const atts = await draftAttachments(gmail, args.attachments, args.attach_from);
-      const raw = buildMime({ from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: args.body, html: args.html_body, attachments: atts });
+      const raw = buildMime({ from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: unwrap(args.body), html: args.html_body, attachments: atts });
       const d = await createDraft(gmail, raw);
       await audit("gmail_create_draft", a.label, { draftId: d.id, to: args.to, subject: args.subject, attachments: atts.map((x) => x.filename) });
       return ok({ account: a.label, draftId: d.id, messageId: d.message?.id, attachments: atts.map((x) => x.filename) });
@@ -373,7 +373,7 @@ export function registerGmailTools(server: McpServer) {
       const existing = (await gmail.users.drafts.get({ userId: "me", id: args.draft_id, format: "metadata" })).data;
       const atts = await draftAttachments(gmail, args.attachments, args.attach_from);
       const raw = buildMime({
-        from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: args.body, html: args.html_body, attachments: atts,
+        from: a.email, to: args.to, cc: args.cc, bcc: args.bcc, subject: args.subject, text: unwrap(args.body), html: args.html_body, attachments: atts,
         inReplyTo: header(existing.message, "In-Reply-To") || undefined, references: header(existing.message, "References") || undefined,
       });
       const d = (await gmail.users.drafts.update({
@@ -423,7 +423,7 @@ export function registerGmailTools(server: McpServer) {
       inputSchema: {
         account: accountArg,
         message_id: z.string().describe("Message being replied to"),
-        body: z.string(),
+        body: z.string().describe("Plain text. One line per paragraph; do not hard-wrap lines."),
         reply_all: z.boolean().default(false),
         cc: emailList.optional().describe("Extra Cc recipients"),
         include_quote: z.boolean().default(true),
@@ -449,7 +449,7 @@ export function registerGmailTools(server: McpServer) {
       const subject = header(m, "Subject");
       const msgId = header(m, "Message-ID") || header(m, "Message-Id");
       const refs = [header(m, "References"), msgId].filter(Boolean).join(" ");
-      let text = body;
+      let text = unwrap(body);
       if (include_quote) {
         const { text: ot, html: oh } = bodies(m.payload);
         const orig = (ot || htmlToText(oh)).slice(0, 10000);

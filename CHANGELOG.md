@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+### Fixed
+- Draft and reply bodies that the client hard-wrapped at ~70 columns are reflowed into one line per paragraph, so mail no longer shows as a narrow column. Short lines (greetings, signatures, lists) and quoted text keep their breaks.
+
 ## 1.2.0
 
 ### Added

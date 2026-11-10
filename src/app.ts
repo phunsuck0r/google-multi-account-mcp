@@ -15,7 +15,7 @@ import { setupPage } from "./setup.js";
 import { q } from "./db.js";
 import { MAX_UPLOAD_BYTES, storeUpload, uploadPending } from "./uploads.js";
 
-export const VERSION = "1.2.0";
+export const VERSION = "1.2.1";
 
 const INSTRUCTIONS = `Multi-account Gmail and Google Calendar.
 Every tool takes an optional "account": a label, full address or domain; omit for the default account. Read/search tools also accept "all".
