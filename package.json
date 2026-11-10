@@ -1,6 +1,6 @@
 {
   "name": "google-multi-account-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",

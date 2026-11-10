@@ -2,7 +2,7 @@ import "./env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { buildMime, htmlToText, summarise } = await import("../src/mime.js");
+const { buildMime, htmlToText, summarise, unwrap } = await import("../src/mime.js");
 const { cleanDescription } = await import("../src/tools/calendar.js");
 const { encrypt, decrypt } = await import("../src/crypto.js");
 
@@ -73,4 +73,29 @@ test("toUtc reads local times in the given zone, including across DST", async ()
   assert.equal(toUtc("2026-11-03T09:00:00+02:00", "UTC"), "2026-11-03T07:00:00.000Z");
   assert.equal(toUtc("2026-11-03T09:00:00Z", "Asia/Tokyo"), "2026-11-03T09:00:00.000Z");
   assert.throws(() => toUtc("next tuesday", "UTC"), /Invalid date-time/);
+});
+
+test("unwrap reflows hard-wrapped paragraphs but keeps short lines and quotes", () => {
+  const wrapped = [
+    "WITHOUT PREJUDICE AND SUBJECT TO CONTRACT", "", "Neave,", "",
+    "Thanks for coming back to me. I'm happy to accept the changes to",
+    "clauses 7.2 and 7.3, the legal fees at £908 plus VAT, and Philomena's",
+    "details at Annex C.", "",
+    "I've added a new clause 3.6 on your payslip and P45. Both will be sent",
+    "to you by email once your final salary payment has been processed, and",
+    "in any event by 31 December.", "", "Thanks", "", "Rob Ashton", "Director, Dial360.ai Ltd",
+    "", "> a quoted line from the earlier message that runs right up to width", "> and continues here",
+  ].join("\n");
+  assert.equal(
+    unwrap(wrapped),
+    [
+      "WITHOUT PREJUDICE AND SUBJECT TO CONTRACT", "", "Neave,", "",
+      "Thanks for coming back to me. I'm happy to accept the changes to clauses 7.2 and 7.3, the legal fees at £908 plus VAT, and Philomena's details at Annex C.", "",
+      "I've added a new clause 3.6 on your payslip and P45. Both will be sent to you by email once your final salary payment has been processed, and in any event by 31 December.",
+      "", "Thanks", "", "Rob Ashton", "Director, Dial360.ai Ltd",
+      "", "> a quoted line from the earlier message that runs right up to width", "> and continues here",
+    ].join("\n"),
+  );
+  const flowing = "A paragraph already written as one long line, well past eighty characters, should be left exactly as it is.\n\nSecond.";
+  assert.equal(unwrap(flowing), flowing);
 });

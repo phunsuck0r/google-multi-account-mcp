@@ -122,4 +122,28 @@ export function buildMime(o: {
   return `${h.join("\r\n")}\r\n${body}\r\n`;
 }
 
+/**
+ * Undo hard line wrapping in a body the client wrapped at ~70 columns, so paragraphs reflow
+ * in the reader's window instead of showing as a narrow column. A line is joined to the next
+ * only when the next line's first word would not have fitted, so short lines (greetings,
+ * signatures, lists, addresses) keep their breaks. Quoted lines are left alone.
+ */
+export function unwrap(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const width = Math.max(...lines.map((l) => l.length));
+  if (width > 80) return text; // not hard-wrapped
+  const out: string[] = [];
+  let joinNext = false;
+  lines.forEach((line, i) => {
+    if (joinNext) out[out.length - 1] += ` ${line.trimStart()}`;
+    else out.push(line);
+    const next = lines[i + 1] ?? "";
+    const firstWord = next.trimStart().split(/\s/)[0];
+    joinNext =
+      line.length >= 40 && Boolean(firstWord) && line.length + 1 + firstWord.length > width &&
+      !/^\s*>/.test(line) && !/^\s*(>|[-*•]\s|\d+[.)]\s)/.test(next);
+  });
+  return out.join("\n");
+}
+
 export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
